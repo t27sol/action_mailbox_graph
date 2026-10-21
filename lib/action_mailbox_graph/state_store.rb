@@ -45,10 +45,10 @@ module ActionMailboxGraph
   end
 
   class DeltaState < ActiveRecord::Base
-    self.table_name = "action_mailbox_graph_delta_states"
+    self.table_name = 'action_mailbox_graph_delta_states'
   end
 
   class Receipt < ActiveRecord::Base
-    self.table_name = "action_mailbox_graph_receipts"
+    self.table_name = 'action_mailbox_graph_receipts'
   end
 end

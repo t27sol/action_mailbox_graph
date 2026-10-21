@@ -8,7 +8,7 @@ module ActionMailboxGraph
     end
 
     def deliver!(mail)
-      @client.send_mime(mail.encoded, mailbox: @mailbox)
+      @client.send_mail(mail.encoded, mailbox: @mailbox)
     end
   end
 end

@@ -1,8 +1,10 @@
-source "https://rubygems.org"
+# frozen_string_literal: true
 
-gemspec path: ".."
-gem "rails", "~> 8.1.0"
-gem "minitest", "~> 5.25"
-gem "rake", "~> 13.2"
-gem "rubocop", "~> 1.75"
-gem "webmock", "~> 3.25"
+source 'https://rubygems.org'
+
+gemspec path: '..'
+gem 'minitest', '~> 5.25'
+gem 'rails', '~> 8.1.0'
+gem 'rake', '~> 13.2'
+gem 'rubocop', '~> 1.75'
+gem 'webmock', '~> 3.25'

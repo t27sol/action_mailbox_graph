@@ -3,6 +3,7 @@
 module ActionMailboxGraph
   class Error < StandardError; end
   class AuthenticationError < Error; end
+
   class RequestError < Error
     attr_reader :status, :retry_after
 
@@ -12,5 +13,6 @@ module ActionMailboxGraph
       super(message)
     end
   end
+
   class ConfigurationError < Error; end
 end

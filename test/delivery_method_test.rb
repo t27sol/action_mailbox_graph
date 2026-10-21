@@ -33,6 +33,7 @@ class DeliveryMethodTest < Minitest::Test
 
   def teardown
     ActionMailer::Base.logger = @original_logger
+    super
   end
 
   def test_graph_delivery_preserves_to_cc_bcc_and_suppresses_mail_payload_logs

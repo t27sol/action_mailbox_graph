@@ -4,6 +4,7 @@ class CreateActionMailboxGraphTables < ActiveRecord::Migration[<%= ActiveRecord:
       table.string :mailbox, null: false
       table.string :folder, null: false
       table.text :delta_link
+      table.datetime :last_polled_at, null: false
       table.timestamps
       table.index [:mailbox, :folder], unique: true
     end

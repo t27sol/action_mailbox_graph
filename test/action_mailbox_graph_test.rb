@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require 'minitest/autorun'
+require 'minitest/mock'
 require 'webmock/minitest'
 require_relative '../lib/action_mailbox_graph'
 
@@ -28,18 +29,20 @@ class MemoryStore
     @received_ids = []
     @links = {}
     @receipt_ids = []
+    @poll_times = {}
   end
 
   def delta_link(mailbox:, folder:)
     links[[mailbox, folder]]
   end
 
-  def save_delta_link(mailbox:, folder:, delta_link:)
-    links[[mailbox, folder]] = delta_link
+  def last_polled_at(mailbox:, folder:)
+    @poll_times[[mailbox, folder]]
   end
 
-  def clear_delta_link(mailbox:, folder:)
-    links[[mailbox, folder]] = nil
+  def save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)
+    links[[mailbox, folder]] = delta_link
+    @poll_times[[mailbox, folder]] = last_polled_at
   end
 
   def received?(mailbox:, message_id:)
@@ -115,10 +118,10 @@ class ActionMailboxGraphTest < Minitest::Test
     assert_equal 2, ActionMailbox::InboundEmail.sources.length
   end
 
-  def test_first_poll_saves_baseline_without_importing_existing_messages
+  def test_first_poll_requests_created_changes_and_saves_baseline_without_importing_existing_messages
     first = initial_delta_url
-    next_page = 'https://graph.microsoft.com/v1.0/baseline/page/2'
-    final_delta = 'https://graph.microsoft.com/v1.0/baseline/cursor'
+    next_page = 'https://graph.microsoft.com/v1.0/baseline/page/2?$skiptoken=opaque-page'
+    final_delta = 'https://graph.microsoft.com/v1.0/baseline/cursor?$deltatoken=opaque-cursor'
     stub_json(:get, first, status: 200, body: { value: [{ id: 'old1' }], '@odata.nextLink' => next_page })
     stub_json(:get, next_page, status: 200, body: { value: [{ id: 'old2' }], '@odata.deltaLink' => final_delta })
     stub_json(:get, final_delta, status: 200, body: { value: [{ id: 'new1' }], '@odata.deltaLink' => final_delta })
@@ -126,10 +129,12 @@ class ActionMailboxGraphTest < Minitest::Test
     store = MemoryStore.new
     poller = ActionMailboxGraph::Poller.new(@configuration, store: store)
 
-    assert_equal 0, poller.call
+    started_at = Time.utc(2026, 10, 21, 12)
+    Time.stub(:now, started_at) { assert_equal 0, poller.call }
     assert_empty ActionMailbox::InboundEmail.sources
     assert_empty store.received_ids
     assert_equal final_delta, store.delta_link(mailbox: @configuration.mailbox, folder: 'Inbox')
+    assert_equal started_at, store.last_polled_at(mailbox: @configuration.mailbox, folder: 'Inbox')
     assert_equal 1, poller.call
     assert_equal [[@configuration.mailbox, 'new1']], store.received_ids
   end
@@ -148,17 +153,46 @@ class ActionMailboxGraphTest < Minitest::Test
     assert_includes Mail.read_from_string(source).recipients, 'visible@example.test'
   end
 
-  def test_expired_delta_link_is_cleared_and_restarted_once
-    store = MemoryStore.new
-    store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox', delta_link: 'https://graph.microsoft.com/stale')
-    stub_request(:get, 'https://graph.microsoft.com/stale').to_return(status: 410, body: 'expired')
-    stub_json(:get, initial_delta_url, status: 200,
-                                     body: { value: [{ id: 'old1' }], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
+  def test_expired_delta_resync_delivers_intervening_mail_once_with_overlap_and_receipts
+    store = saved_poll_store
+    store.record_received(mailbox: @configuration.mailbox, message_id: 'seen1', inbound_email_id: 1)
+    store.mark_processed(mailbox: @configuration.mailbox, message_id: 'seen1')
+    first_page = [{ id: 'old1', receivedDateTime: '2026-10-21T11:54:59Z' },
+                  { id: 'seen1', receivedDateTime: '2026-10-21T11:59:00Z' },
+                  { id: 'overlap1', receivedDateTime: '2026-10-21T11:55:00Z' }]
+    new_message = { id: 'new1', receivedDateTime: '2026-10-21T12:01:00Z' }
+    stub_recovery_pages(first_page, [new_message, new_message])
+    stub_message('overlap1')
+    stub_message('new1')
+    poller = ActionMailboxGraph::Poller.new(@configuration, store: store)
 
-    assert_equal 0, ActionMailboxGraph::Poller.new(@configuration, store: store).call
+    started_at = Time.utc(2026, 10, 21, 12, 5)
+    Time.stub(:now, started_at) { assert_equal 2, poller.call }
+    assert_equal started_at, store.last_polled_at(mailbox: @configuration.mailbox, folder: 'Inbox')
+    assert_equal 0, poller.call
     assert_equal 'https://graph.microsoft.com/fresh', store.delta_link(mailbox: @configuration.mailbox, folder: 'Inbox')
-    assert_empty ActionMailbox::InboundEmail.sources
-    assert_empty store.received_ids
+    assert_equal 2, ActionMailbox::InboundEmail.sources.length
+    assert_equal 1, store.received_ids.count([@configuration.mailbox, 'new1'])
+    assert_requested :get, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/new1/$value', times: 1
+    refute_includes store.received_ids, [@configuration.mailbox, 'old1']
+  end
+
+  def test_failed_resync_preserves_checkpoint_and_retries_without_repeating_handoff
+    store = saved_poll_store
+    new_message = { id: 'new1', receivedDateTime: '2026-10-21T12:01:00Z' }
+    stub_recovery_pages([new_message], [{ id: 'new2', receivedDateTime: '2026-10-21T12:02:00Z' }])
+    stub_message('new1')
+    stub_message('new2')
+    failure = stub_request(:get, 'https://graph.microsoft.com/resync/page/2').to_return(status: 400)
+    poller = ActionMailboxGraph::Poller.new(@configuration, store: store)
+
+    assert_raises(ActionMailboxGraph::RequestError) { poller.call }
+    assert_equal 'https://graph.microsoft.com/stale', store.delta_link(mailbox: @configuration.mailbox, folder: 'Inbox')
+    assert_equal Time.utc(2026, 10, 21, 12), store.last_polled_at(mailbox: @configuration.mailbox, folder: 'Inbox')
+    remove_request_stub(failure)
+    assert_equal 1, poller.call
+    assert_equal 2, ActionMailbox::InboundEmail.sources.length
+    assert_requested :get, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/new1/$value', times: 1
   end
 
   def test_retries_retryable_status_and_honors_retry_after
@@ -193,12 +227,29 @@ class ActionMailboxGraphTest < Minitest::Test
     final_delta = 'https://graph.microsoft.com/v1.0/delta/cursor'
     stub_delta_pages(first, next_page, final_delta)
     store = MemoryStore.new
-    store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox', delta_link: first)
+    store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox', delta_link: first, last_polled_at: Time.now)
     [ActionMailboxGraph::Poller.new(@configuration, store: store), store, final_delta]
   end
 
   def initial_delta_url
     'https://graph.microsoft.com/v1.0/users/shared%40example.test/mailFolders/Inbox/messages/delta?' \
-      '%24select=id%2CisRead%2CreceivedDateTime&%24top=50'
+      '%24select=id%2CisRead%2CreceivedDateTime&%24top=50&changeType=created'
+  end
+
+  def saved_poll_store
+    MemoryStore.new.tap do |store|
+      store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox',
+                            delta_link: 'https://graph.microsoft.com/stale', last_polled_at: Time.utc(2026, 10, 21, 12))
+    end
+  end
+
+  def stub_recovery_pages(first_page, second_page)
+    stub_request(:get, 'https://graph.microsoft.com/stale').to_return(status: 410, body: 'expired')
+    stub_json(:get, initial_delta_url, status: 200,
+                                     body: { value: first_page, '@odata.nextLink' => 'https://graph.microsoft.com/resync/page/2' })
+    stub_json(:get, 'https://graph.microsoft.com/resync/page/2', status: 200,
+                                                            body: { value: second_page, '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
+    stub_json(:get, 'https://graph.microsoft.com/fresh', status: 200,
+                                                     body: { value: [], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
   end
 end

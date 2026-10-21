@@ -1,7 +1,11 @@
 # frozen_string_literal: true
 
+require 'time'
+
 module ActionMailboxGraph
   class Poller
+    RESYNC_OVERLAP = 300
+
     def initialize(configuration = ActionMailboxGraph.configuration, client: nil, store: nil)
       @configuration = configuration.validate!
       @client = client || Client.new(configuration)
@@ -11,7 +15,8 @@ module ActionMailboxGraph
     def call
       mailbox = @configuration.mailbox
       folder = @configuration.folder
-      cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false, handed_off: 0 }
+      cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false,
+                 handed_off: 0, started_at: Time.now }
       cursor[:baseline] = cursor[:delta_link].nil?
 
       poll_delta(mailbox, folder, cursor)
@@ -30,11 +35,11 @@ module ActionMailboxGraph
     end
 
     def advance_cursor(page, mailbox, folder, cursor)
-      cursor[:handed_off] += process_page(page, mailbox) unless cursor[:baseline]
+      cursor[:handed_off] += process_page(page, mailbox, cursor[:received_since]) unless cursor[:baseline]
       next_link = page['@odata.nextLink']
       return cursor[:delta_link] = next_link if next_link
 
-      save_final_link(page, mailbox, folder)
+      save_final_link(page, mailbox, folder, cursor[:started_at])
       false
     end
 
@@ -43,16 +48,20 @@ module ActionMailboxGraph
     rescue RequestError => e
       raise unless e.status == 410 && !cursor[:reset]
 
-      @store.clear_delta_link(mailbox: mailbox, folder: folder)
+      unless cursor[:baseline]
+        cursor[:received_since] = @store.last_polled_at(mailbox: mailbox, folder: folder) - RESYNC_OVERLAP
+      end
       cursor[:delta_link] = nil
-      cursor[:baseline] = true
       cursor[:reset] = true
       :restart
     end
 
-    def process_page(page, mailbox)
+    def process_page(page, mailbox, received_since)
       (page['value'] || []).sum do |message|
-        message['@removed'] ? 0 : process_message(message, mailbox)
+        next 0 if message['@removed']
+        next 0 if received_since && Time.iso8601(message.fetch('receivedDateTime')) < received_since
+
+        process_message(message, mailbox)
       end
     end
 
@@ -80,9 +89,11 @@ module ActionMailboxGraph
       end
     end
 
-    def save_final_link(page, mailbox, folder)
+    def save_final_link(page, mailbox, folder, started_at)
       final_link = page['@odata.deltaLink']
-      @store.save_delta_link(mailbox: mailbox, folder: folder, delta_link: final_link) if final_link
+      return unless final_link
+
+      @store.save_delta_link(mailbox: mailbox, folder: folder, delta_link: final_link, last_polled_at: started_at)
     end
   end
 end

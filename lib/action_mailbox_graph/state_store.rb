@@ -6,13 +6,13 @@ module ActionMailboxGraph
       state_model.find_by(mailbox: mailbox, folder: folder)&.delta_link
     end
 
-    def save_delta_link(mailbox:, folder:, delta_link:)
-      record = state_model.find_or_initialize_by(mailbox: mailbox, folder: folder)
-      record.update!(delta_link: delta_link)
+    def last_polled_at(mailbox:, folder:)
+      state_model.find_by(mailbox: mailbox, folder: folder)&.last_polled_at
     end
 
-    def clear_delta_link(mailbox:, folder:)
-      state_model.find_by(mailbox: mailbox, folder: folder)&.update!(delta_link: nil)
+    def save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)
+      record = state_model.find_or_initialize_by(mailbox: mailbox, folder: folder)
+      record.update!(delta_link: delta_link, last_polled_at: last_polled_at)
     end
 
     def received?(mailbox:, message_id:)

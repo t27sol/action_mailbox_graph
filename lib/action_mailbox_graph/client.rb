@@ -30,7 +30,8 @@ module ActionMailboxGraph
     def delta_page(folder: @configuration.folder, mailbox: nil, delta_link: nil)
       address = selected_mailbox(mailbox)
       path = delta_link || user_path(address, "mailFolders/#{escape_path(folder)}/messages/delta")
-      query = { '$select' => 'id,isRead,receivedDateTime', '$top' => @configuration.poll_batch_size }
+      query = { '$select' => 'id,isRead,receivedDateTime', '$top' => @configuration.poll_batch_size,
+                'changeType' => 'created' }
       query = nil if delta_link
       response = request(:get, path, query: query)
       JSON.parse(response.body)

@@ -8,9 +8,9 @@ require_relative '../lib/action_mailbox_graph'
 WebMock.disable_net_connect!
 
 class GraphPrivacyMailer < ActionMailer::Base
-  def notice
+  def notice(recipient = 'private-recipient-marker@example.test')
     attachments['private-attachment-marker.txt'] = 'private-attachment-content-marker'
-    mail(from: 'sender@example.test', to: 'private-recipient-marker@example.test',
+    mail(from: 'sender@example.test', to: recipient,
          cc: 'private-cc-marker@example.test', bcc: 'private-bcc-marker@example.test',
          subject: 'private-subject-marker', body: 'private-body-marker')
   end
@@ -89,10 +89,48 @@ class DeliveryMethodTest < Minitest::Test
     delivery = GraphPrivacyMailer.notice
     delivery.message.perform_deliveries = false
 
-    delivery.deliver_now!
+    assert_same delivery.message, delivery.deliver_now!
 
     assert_requested request
     assert_private_logs
+  end
+
+  def test_direct_mail_delivery_exposes_settings_and_returns_the_requested_transport_response
+    request = stub_request(:post, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/sendMail')
+              .to_return(status: 202)
+    message = GraphPrivacyMailer.notice.message
+    settings = GraphPrivacyMailer.microsoft_graph_settings.merge(return_response: true)
+    message.delivery_method(ActionMailboxGraph::DeliveryMethod, settings)
+
+    response = message.deliver!
+
+    assert_equal settings, message.delivery_method.settings
+    assert_equal '202', response.code
+    assert_requested request, times: 1
+    assert_nil Mail.read_from_string(message.encoded).bcc
+  end
+
+  def test_deliver_later_keeps_sensitive_mail_out_of_logs_with_documented_job_configuration
+    job_class = ActionMailer::MailDeliveryJob
+    original_arguments = job_class.log_arguments
+    original_adapter = job_class.queue_adapter
+    original_logger = ActiveJob::Base.logger
+    job_class.log_arguments = false
+    job_class.queue_adapter = :inline
+    ActiveJob::Base.logger = ActionMailer::Base.logger
+    request = stub_request(:post, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/sendMail')
+              .to_return(status: 202)
+
+    GraphPrivacyMailer.notice('private-recipient-marker@example.test').deliver_later
+
+    assert_requested request, times: 1
+    assert_includes @logs.string, 'Enqueued ActionMailer::MailDeliveryJob'
+    assert_includes @logs.string, 'Performing ActionMailer::MailDeliveryJob'
+    assert_private_logs
+  ensure
+    job_class.log_arguments = original_arguments
+    job_class.queue_adapter = original_adapter
+    ActiveJob::Base.logger = original_logger
   end
 
   def test_other_delivery_methods_retain_action_mailer_instrumentation

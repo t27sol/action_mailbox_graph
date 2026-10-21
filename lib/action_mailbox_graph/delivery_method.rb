@@ -10,7 +10,10 @@ module ActionMailboxGraph
   end
 
   class DeliveryMethod
+    attr_reader :settings
+
     def initialize(settings = {})
+      @settings = settings
       @mailbox = settings[:mailbox]
       @client = settings[:client] || Client.new(ActionMailboxGraph.configuration)
     end

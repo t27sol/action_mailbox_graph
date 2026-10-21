@@ -54,7 +54,8 @@ The Graph client uses the configured mailbox for every operation unless a caller
 Action Mailbox routes the received MIME asynchronously using the application's normal `ApplicationMailbox` routing rules.
 The gem prepends `X-Original-To` with the shared mailbox address so address-based routes also match blind-copied messages.
 Use `config.processed_folder` only with a Graph folder ID; when it is unset, successfully handed-off messages are marked read.
-Use `config.state_store` to provide a custom store that implements `delta_link`, `save_delta_link`, `clear_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+Use `config.state_store` to provide a custom store that implements `delta_link`, `last_polled_at`, `save_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+`save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)` must atomically save the cursor and poll timestamp; `last_polled_at(mailbox:, folder:)` returns that timestamp as a `Time`.
 
 ## Polling schedule
 
@@ -72,8 +73,10 @@ bin/rails action_mailbox_graph:poll
 
 Schedule it at the interval your application needs and ensure only one poller runs for a mailbox at a time.
 The first poll establishes and saves a delta baseline without importing pre-existing mail; later polls use the saved delta link to fetch new messages.
+Initial delta requests use Graph's `changeType=created` option so later read-status or content updates do not import historical messages. Graph encodes this option into its continuation links.
 The poller follows all Graph delta pages, persists the final delta link, and resets to a fresh delta query when Graph expires a link with HTTP 410.
-After a reset, it establishes a new baseline without importing messages already in the folder.
+After an expired cursor, it scans the entire watched folder and hands off messages received at or after the last successful poll's start time, with a five-minute overlap. Existing receipts prevent repeat handoff.
+The cursor and poll-start timestamp advance together only after every page succeeds. A failed recovery retains the previous checkpoint for the next attempt; first-ever startup remains baseline-only.
 The included Active Record store keeps delta state and Graph-message receipts in the application's database.
 It avoids handing the same Graph message to Action Mailbox twice across poller restarts and retries marking/moving a handed-off message if that final Graph operation previously failed.
 
@@ -155,8 +158,15 @@ Create and license a normal user account only if your organization requires inte
 
 ## Security and operational notes
 
-The gem does not log message content, recipients, attachments, access tokens, request headers, or Graph response bodies.
+The no-logging guarantee covers gem-owned logs and delivery instrumentation: these do not log message content, recipients, attachments, access tokens, request headers, or Graph response bodies.
 Action Mailer's delivery instrumentation is suppressed for the Microsoft Graph delivery method.
+Rails job logs are controlled by the application. For apps using `deliver_later`, disable argument logging in an initializer so recipients and other sensitive mailer arguments stay out of enqueue and execution logs:
+
+```ruby
+ActionMailer::MailDeliveryJob.log_arguments = false
+```
+
+Apply the same setting to a custom delivery job if the app uses one, and review application callbacks and logging separately.
 Graph request errors include status codes and generic messages only.
 Retry attempts are bounded and honor Graph's `Retry-After` header for HTTP 429, 503, and 504 responses.
 

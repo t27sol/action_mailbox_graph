@@ -1,0 +1,25 @@
+class CreateActionMailboxGraphTables < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  def change
+    opaque_id_options = { null: false }
+    opaque_id_options[:collation] = "utf8mb4_bin" if %w[Mysql2 Trilogy].include?(connection.adapter_name)
+
+    create_table :action_mailbox_graph_delta_states do |table|
+      table.string :mailbox, null: false
+      table.string :folder, **opaque_id_options
+      table.text :delta_link
+      table.datetime :baseline_at, null: false
+      table.datetime :last_polled_at
+      table.timestamps
+      table.index [:mailbox, :folder], unique: true
+    end
+
+    create_table :action_mailbox_graph_receipts do |table|
+      table.string :mailbox, null: false
+      table.string :graph_message_id, **opaque_id_options
+      table.bigint :inbound_email_id
+      table.boolean :processed, null: false, default: false
+      table.timestamps
+      table.index [:mailbox, :graph_message_id], unique: true, name: "index_action_mailbox_graph_receipts_unique"
+    end
+  end
+end

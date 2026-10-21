@@ -20,7 +20,14 @@ class RailtieTest < Minitest::Test
         config.action_mailer.show_previews = false
       end
 
+      configuration_before_boot = ActionMailboxGraph.configuration
       GraphBootApplication.initialize!
+      unless ActionMailboxGraph.configuration.equal?(configuration_before_boot)
+        raise 'Graph configuration replaced during boot'
+      end
+      unless ActionMailboxGraph.configuration.mailbox == 'shared@example.test'
+        raise 'initializer mailbox configuration lost'
+      end
       raise 'wrong transport selected' unless ActionMailer::Base.delivery_method == :microsoft_graph
       raise 'job arguments still logged' if ActionMailer::MailDeliveryJob.log_arguments
       unless ActionMailer::Base.delivery_methods[:microsoft_graph] == ActionMailboxGraph::DeliveryMethod

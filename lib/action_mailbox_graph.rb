@@ -14,8 +14,6 @@ require 'action_mailbox_graph/delivery_method'
 
 module ActionMailboxGraph
   class << self
-    attr_writer :configuration
-
     def configuration
       @configuration ||= Configuration.new
     end

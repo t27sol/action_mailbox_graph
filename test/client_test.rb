@@ -33,7 +33,7 @@ class ClientTest < Minitest::Test
   # Graph's move-message contract requires destinationId to preserve the folder ID.
   # https://learn.microsoft.com/en-us/graph/api/message-move
   def test_move_submits_the_graph_json_destination
-    folder = "opaque/\"folder\\id+="
+    folder = 'opaque/"folder\id+='
     request = stub_request(:post, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/id/move')
               .with(headers: { 'Content-Type' => 'application/json' }) do |http|
                 JSON.parse(http.body) == { 'destinationId' => folder }

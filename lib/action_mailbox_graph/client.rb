@@ -74,7 +74,7 @@ module ActionMailboxGraph
     end
 
     def build_uri(path, query)
-      uri = URI(path.start_with?('http') ? path : "#{GRAPH_ROOT}#{path}")
+      uri = URI(path)
       unless uri.scheme == 'https' && uri.host == 'graph.microsoft.com' && uri.userinfo.nil?
         raise ConfigurationError, 'Graph returned a delta URL outside the Microsoft Graph origin'
       end

@@ -49,6 +49,7 @@ Rails.application.config.action_mailer.delivery_method = :microsoft_graph
 
 By default, the gem uses Azure managed identity and selects the user-assigned identity configured by `identity_client_id`.
 Leave the client ID empty to use the hosting service's default managed identity.
+Managed identity requires the hosting service's `IDENTITY_ENDPOINT` and `IDENTITY_HEADER` environment variables; the gem sends the header value as `X-IDENTITY-HEADER`.
 The Graph client uses the configured mailbox for every operation unless a caller explicitly supplies a different mailbox.
 
 Action Mailbox routes the received MIME asynchronously using the application's normal `ApplicationMailbox` routing rules.
@@ -170,7 +171,8 @@ Apply the same setting to a custom delivery job if the app uses one, and review 
 Graph request errors include status codes and generic messages only.
 Retry attempts are bounded and honor Graph's `Retry-After` header for HTTP 429, 503, and 504 responses.
 
-Microsoft Graph delta links are opaque; treat the database values as sensitive operational state and do not edit them manually.
+Microsoft Graph delta and next links must be absolute HTTPS URLs on `graph.microsoft.com`; relative links are rejected.
+These links are opaque; treat the database values as sensitive operational state and do not edit them manually.
 The database receipts contain Graph message IDs and Action Mailbox record IDs, not message content.
 Use Action Mailbox's normal data retention and incineration settings for the stored raw MIME.
 

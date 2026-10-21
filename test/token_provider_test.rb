@@ -8,6 +8,42 @@ require_relative '../lib/action_mailbox_graph'
 WebMock.disable_net_connect!
 
 class TokenProviderTest < Minitest::Test
+  def test_managed_identity_uses_identity_header_and_selected_client_id
+    provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
+      client_id: 'selected-identity',
+      env: { 'IDENTITY_ENDPOINT' => 'http://identity.test/token', 'IDENTITY_HEADER' => 'identity-header' }
+    )
+    request = stub_request(:get, 'http://identity.test/token')
+              .with(query: { resource: 'https://graph.microsoft.com/', 'api-version' => '2019-08-01',
+                             client_id: 'selected-identity' }, headers: { 'X-IDENTITY-HEADER' => 'identity-header' })
+              .to_return(status: 200, body: JSON.generate(access_token: 'managed-token', expires_in: 3600))
+
+    assert_equal 'managed-token', provider.token
+    assert_requested request, times: 1
+  end
+
+  def test_managed_identity_rejects_legacy_environment_without_requesting_a_token
+    provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
+      env: { 'MSI_ENDPOINT' => 'http://legacy-identity.test/token', 'MSI_SECRET' => 'legacy-secret' }
+    )
+    stub_request(:get, /legacy-identity\.test/)
+      .to_return(status: 200, body: JSON.generate(access_token: 'legacy-token', expires_in: 3600))
+
+    error = assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }
+
+    refute_includes error.message, 'legacy-secret'
+    assert_not_requested :any, /legacy-identity\.test/
+  end
+
+  def test_managed_identity_requires_both_endpoint_and_header_before_requesting_a_token
+    [{}, { 'IDENTITY_ENDPOINT' => 'http://identity.test/token' }, { 'IDENTITY_HEADER' => 'identity-header' }].each do |env|
+      provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(env: env)
+
+      assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }
+    end
+    assert_not_requested :any, /identity\.test/
+  end
+
   def test_managed_identity_epoch_string_authenticates_and_refreshes_under_rails
     provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
       env: { 'IDENTITY_ENDPOINT' => 'http://identity.test/token', 'IDENTITY_HEADER' => 'identity-header' }

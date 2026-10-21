@@ -119,13 +119,7 @@ module ActionMailboxGraph
     end
 
     def endpoint_and_headers
-      if @env['IDENTITY_ENDPOINT']
-        [@env.fetch('IDENTITY_ENDPOINT'), { 'X-IDENTITY-HEADER' => @env.fetch('IDENTITY_HEADER') }]
-      elsif @env['MSI_ENDPOINT']
-        [@env.fetch('MSI_ENDPOINT'), { 'Secret' => @env.fetch('MSI_SECRET') }]
-      else
-        raise AuthenticationError, 'no supported managed identity endpoint is configured'
-      end
+      [@env.fetch('IDENTITY_ENDPOINT'), { 'X-IDENTITY-HEADER' => @env.fetch('IDENTITY_HEADER') }]
     rescue KeyError
       raise AuthenticationError, 'managed identity endpoint credentials are incomplete'
     end

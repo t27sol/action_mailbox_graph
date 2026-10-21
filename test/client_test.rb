@@ -64,7 +64,8 @@ class ClientTest < Minitest::Test
     next_link = 'https://graph.microsoft.com/v1.0/messages/delta?$skiptoken=opaque%2Bnext'
     delta_link = 'https://graph.microsoft.com/v1.0/messages/delta?$deltatoken=opaque%2Bsaved'
     initial_request = stub_request(:get, initial)
-                      .with(query: { '$select' => 'id,isRead,receivedDateTime', '$top' => '50', 'changeType' => 'created' })
+                      .with(query: { '$select' => 'id,isRead,receivedDateTime', '$top' => '50',
+                                     'changeType' => 'created' })
                       .to_return(status: 200, body: JSON.generate(value: [], '@odata.nextLink' => next_link))
     next_request = stub_request(:get, next_link)
                    .to_return(status: 200, body: JSON.generate(value: [], '@odata.deltaLink' => delta_link))

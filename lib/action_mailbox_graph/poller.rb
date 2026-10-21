@@ -15,6 +15,14 @@ module ActionMailboxGraph
     def call
       mailbox = @configuration.mailbox
       folder = @configuration.folder
+      cursor = initial_cursor(mailbox, folder)
+      poll_delta(mailbox, folder, cursor)
+      cursor[:handed_off]
+    end
+
+    private
+
+    def initial_cursor(mailbox, folder)
       cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false,
                  handed_off: 0, started_at: Time.now }
       baseline_at = @store.baseline_at(mailbox: mailbox, folder: folder)
@@ -23,11 +31,8 @@ module ActionMailboxGraph
         mailbox: mailbox, folder: folder, started_at: cursor[:started_at]
       )
 
-      poll_delta(mailbox, folder, cursor)
-      cursor[:handed_off]
+      cursor
     end
-
-    private
 
     def poll_delta(mailbox, folder, cursor)
       loop do
@@ -53,10 +58,7 @@ module ActionMailboxGraph
       raise unless e.status == 410 && !cursor[:reset]
 
       last_polled_at = @store.last_polled_at(mailbox: mailbox, folder: folder)
-      if last_polled_at
-        cursor[:received_since] = [cursor[:received_since],
-                                  last_polled_at - RESYNC_OVERLAP].max
-      end
+      cursor[:received_since] = [cursor[:received_since], last_polled_at - RESYNC_OVERLAP].max if last_polled_at
       cursor[:delta_link] = nil
       cursor[:reset] = true
       :restart
@@ -77,15 +79,19 @@ module ActionMailboxGraph
       unless @store.received?(mailbox: mailbox, message_id: message_id)
         return 0 if message_received_at(message, mailbox) < received_since
 
-        mime = @client.raw_mime(message_id, mailbox: mailbox)
-        mime = "X-Original-To: #{mailbox}\r\n#{mime}"
-        inbound_email = ActionMailbox::InboundEmail.create_and_extract_message_id!(mime)
-        @store.record_received(mailbox: mailbox, message_id: message_id, inbound_email_id: inbound_email&.id)
+        handoff_message(message_id, mailbox)
       end
 
       finalize_message(message_id, mailbox)
       @store.mark_processed(mailbox: mailbox, message_id: message_id)
       1
+    end
+
+    def handoff_message(message_id, mailbox)
+      mime = @client.raw_mime(message_id, mailbox: mailbox)
+      mime = "X-Original-To: #{mailbox}\r\n#{mime}"
+      inbound_email = ActionMailbox::InboundEmail.create_and_extract_message_id!(mime)
+      @store.record_received(mailbox: mailbox, message_id: message_id, inbound_email_id: inbound_email&.id)
     end
 
     def message_received_at(message, mailbox)

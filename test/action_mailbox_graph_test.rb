@@ -89,11 +89,11 @@ class ActionMailboxGraphTest < Minitest::Test
 
   def stub_delta_pages(first, next_page, final_delta)
     stub_json(:get, first, status: 200,
-                          body: { value: [{ id: 'm1', receivedDateTime: '2026-10-21T12:01:00Z' }],
-                                  '@odata.nextLink' => next_page })
+                           body: { value: [{ id: 'm1', receivedDateTime: '2026-10-21T12:01:00Z' }],
+                                   '@odata.nextLink' => next_page })
     stub_json(:get, next_page, status: 200,
-                              body: { value: [{ id: 'm2', receivedDateTime: '2026-10-21T12:02:00Z' }],
-                                      '@odata.deltaLink' => final_delta })
+                               body: { value: [{ id: 'm2', receivedDateTime: '2026-10-21T12:02:00Z' }],
+                                       '@odata.deltaLink' => final_delta })
     stub_json(:get, final_delta, status: 200, body: { value: [], '@odata.deltaLink' => final_delta })
     stub_message('m1')
     stub_message('m2')
@@ -136,8 +136,9 @@ class ActionMailboxGraphTest < Minitest::Test
     store.record_received(mailbox: @configuration.mailbox, message_id: 'm1', inbound_email_id: 1)
     store.mark_processed(mailbox: @configuration.mailbox, message_id: 'm1')
     store.record_received(mailbox: @configuration.mailbox, message_id: 'm2', inbound_email_id: 2)
-    stub_json(:get, 'https://graph.microsoft.com/v1.0/saved/cursor', status: 200,
-              body: { value: [{ id: 'm1', isRead: true }, { id: 'm2', isRead: false }], '@odata.deltaLink' => final_delta })
+    stub_json(:get, 'https://graph.microsoft.com/v1.0/saved/cursor',
+              status: 200, body: { value: [{ id: 'm1', isRead: true }, { id: 'm2', isRead: false }],
+                                   '@odata.deltaLink' => final_delta })
 
     assert_equal 1, poller.call
     assert_empty ActionMailbox::InboundEmail.sources
@@ -150,8 +151,9 @@ class ActionMailboxGraphTest < Minitest::Test
 
   def test_unseen_sparse_events_resolve_timestamps_before_the_baseline_guard
     poller, store, final_delta = poller_with_two_page_fixture
-    stub_json(:get, 'https://graph.microsoft.com/v1.0/saved/cursor', status: 200,
-              body: { value: [{ id: 'old1', isRead: true }, { id: 'new1', isRead: false }], '@odata.deltaLink' => final_delta })
+    stub_json(:get, 'https://graph.microsoft.com/v1.0/saved/cursor',
+              status: 200, body: { value: [{ id: 'old1', isRead: true }, { id: 'new1', isRead: false }],
+                                   '@odata.deltaLink' => final_delta })
     stub_message_timestamp('old1', '2026-10-21T11:59:59Z')
     stub_message_timestamp('new1', '2026-10-21T12:01:00Z')
     stub_message('new1')
@@ -170,8 +172,8 @@ class ActionMailboxGraphTest < Minitest::Test
     stub_json(:get, first, status: 200, body: { value: [{ id: 'old1' }], '@odata.nextLink' => next_page })
     stub_json(:get, next_page, status: 200, body: { value: [{ id: 'old2' }], '@odata.deltaLink' => final_delta })
     stub_json(:get, final_delta, status: 200,
-                                body: { value: [{ id: 'new1', receivedDateTime: '2026-10-21T12:01:00Z' }],
-                                        '@odata.deltaLink' => final_delta })
+                                 body: { value: [{ id: 'new1', receivedDateTime: '2026-10-21T12:01:00Z' }],
+                                         '@odata.deltaLink' => final_delta })
     stub_message('new1')
     store = MemoryStore.new
     poller = ActionMailboxGraph::Poller.new(@configuration, store: store)
@@ -253,7 +255,7 @@ class ActionMailboxGraphTest < Minitest::Test
     stub_request(:get, initial_delta_url).to_return(
       { status: 410 },
       { status: 200, body: JSON.generate(value: [{ id: 'new1', receivedDateTime: '2026-10-21T12:01:00Z' }],
-                                        '@odata.deltaLink' => final_delta) }
+                                         '@odata.deltaLink' => final_delta) }
     )
     stub_message('new1')
 
@@ -373,11 +375,12 @@ class ActionMailboxGraphTest < Minitest::Test
 
   def stub_recovery_pages(first_page, second_page)
     stub_request(:get, 'https://graph.microsoft.com/stale').to_return(status: 410, body: 'expired')
-    stub_json(:get, initial_delta_url, status: 200,
-                                     body: { value: first_page, '@odata.nextLink' => 'https://graph.microsoft.com/resync/page/2' })
-    stub_json(:get, 'https://graph.microsoft.com/resync/page/2', status: 200,
-                                                            body: { value: second_page, '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
-    stub_json(:get, 'https://graph.microsoft.com/fresh', status: 200,
-                                                     body: { value: [], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
+    stub_json(:get, initial_delta_url,
+              status: 200, body: { value: first_page,
+                                   '@odata.nextLink' => 'https://graph.microsoft.com/resync/page/2' })
+    stub_json(:get, 'https://graph.microsoft.com/resync/page/2',
+              status: 200, body: { value: second_page, '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
+    stub_json(:get, 'https://graph.microsoft.com/fresh',
+              status: 200, body: { value: [], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
   end
 end

@@ -41,7 +41,8 @@ class MigrationTest < Minitest::Test
   private
 
   def generated_schema(adapter)
-    template = File.expand_path('../lib/action_mailbox_graph/templates/create_action_mailbox_graph_tables.rb.erb', __dir__)
+    template = File.expand_path('../lib/action_mailbox_graph/templates/create_action_mailbox_graph_tables.rb.erb',
+                                __dir__)
     output = ERB.new(File.read(template)).result
     scope = Module.new
     scope.module_eval(output, 'generated_migration.rb', 1)

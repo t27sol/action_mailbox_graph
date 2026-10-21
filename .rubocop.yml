@@ -8,5 +8,16 @@ Layout/LineLength:
 Style/Documentation:
   Enabled: false
 
+# Keep test scenarios, their setup, and assertions together.
+Metrics/AbcSize:
+  Exclude:
+    - 'test/**/*'
+
 Metrics/ClassLength:
   Max: 130
+  Exclude:
+    - 'test/**/*'
+
+Metrics/MethodLength:
+  Exclude:
+    - 'test/**/*'

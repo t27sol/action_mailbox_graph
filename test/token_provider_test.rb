@@ -81,7 +81,8 @@ class TokenProviderTest < Minitest::Test
   end
 
   def test_managed_identity_requires_both_endpoint_and_header_before_requesting_a_token
-    [{}, { 'IDENTITY_ENDPOINT' => 'http://identity.test/token' }, { 'IDENTITY_HEADER' => 'identity-header' }].each do |env|
+    [{}, { 'IDENTITY_ENDPOINT' => 'http://identity.test/token' },
+     { 'IDENTITY_HEADER' => 'identity-header' }].each do |env|
       provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(env: env)
 
       assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }
@@ -98,15 +99,16 @@ class TokenProviderTest < Minitest::Test
                     headers: { 'X-IDENTITY-HEADER' => 'identity-header' })
               .to_return(status: 200, body: JSON.generate(access_token: 'managed-token', expires_on: '1792558800'))
 
-    Time.stub(:now, Time.at(1792555200)) { 2.times { assert_equal 'managed-token', provider.token } }
+    Time.stub(:now, Time.at(1_792_555_200)) { 2.times { assert_equal 'managed-token', provider.token } }
     assert_requested request, times: 1
-    Time.stub(:now, Time.at(1792558500)) { assert_equal 'managed-token', provider.token }
+    Time.stub(:now, Time.at(1_792_558_500)) { assert_equal 'managed-token', provider.token }
     assert_requested request, times: 2
   end
 
   def test_azure_cli_reads_access_token_and_prefers_utc_epoch_expiry
-    output = JSON.generate(accessToken: 'cli-token', tokenType: 'Bearer', expires_on: 1792558800,
-                           expiresOn: '2000-01-01 00:00:00.000000', tenant: 'tenant-id', subscription: 'subscription-id')
+    output = JSON.generate(accessToken: 'cli-token', tokenType: 'Bearer', expires_on: 1_792_558_800,
+                           expiresOn: '2000-01-01 00:00:00.000000', tenant: 'tenant-id',
+                           subscription: 'subscription-id')
     calls = []
     capture = lambda do |*args|
       calls << args
@@ -115,9 +117,9 @@ class TokenProviderTest < Minitest::Test
     provider = ActionMailboxGraph::AzureCliTokenProvider.new
 
     Open3.stub(:capture3, capture) do
-      Time.stub(:now, Time.at(1792555200)) { 2.times { assert_equal 'cli-token', provider.token } }
+      Time.stub(:now, Time.at(1_792_555_200)) { 2.times { assert_equal 'cli-token', provider.token } }
       assert_equal 1, calls.length
-      Time.stub(:now, Time.at(1792558500)) { assert_equal 'cli-token', provider.token }
+      Time.stub(:now, Time.at(1_792_558_500)) { assert_equal 'cli-token', provider.token }
     end
     assert_equal 2, calls.length
     assert_equal ['az', 'account', 'get-access-token', '--scope', 'https://graph.microsoft.com/.default',
@@ -128,7 +130,10 @@ class TokenProviderTest < Minitest::Test
     output = JSON.generate(accessToken: 'legacy-cli-token', tokenType: 'Bearer',
                            expiresOn: '2099-01-02 03:04:05.000000', tenant: 'tenant-id')
     calls = 0
-    capture = ->(*) { calls += 1; [output, '', successful_status] }
+    capture = lambda { |*|
+      calls += 1
+      [output, '', successful_status]
+    }
     provider = ActionMailboxGraph::AzureCliTokenProvider.new
 
     Open3.stub(:capture3, capture) do
@@ -145,20 +150,20 @@ class TokenProviderTest < Minitest::Test
     calls = 0
     callable = lambda do
       calls += 1
-      ActionMailboxGraph::Token.new(access_token: "token-#{calls}", expires_at: 1792558800)
+      ActionMailboxGraph::Token.new(access_token: "token-#{calls}", expires_at: 1_792_558_800)
     end
     provider = ActionMailboxGraph::CallableTokenProvider.new(callable)
 
-    Time.stub(:now, Time.at(1792555200)) { 2.times { assert_equal 'token-1', provider.token } }
-    Time.stub(:now, Time.at(1792558500)) { assert_equal 'token-2', provider.token }
+    Time.stub(:now, Time.at(1_792_555_200)) { 2.times { assert_equal 'token-1', provider.token } }
+    Time.stub(:now, Time.at(1_792_558_500)) { assert_equal 'token-2', provider.token }
     assert_equal 2, calls
   end
 
   def test_callable_rejects_strings_hashes_and_alternate_expiry_forms
-    invalid = ['secret-token', { access_token: 'secret-token', expires_at: 1792558800 },
-               { 'access_token' => 'secret-token', 'expires_on' => 1792558800 },
+    invalid = ['secret-token', { access_token: 'secret-token', expires_at: 1_792_558_800 },
+               { 'access_token' => 'secret-token', 'expires_on' => 1_792_558_800 },
                ActionMailboxGraph::Token.new(access_token: 'secret-token', expires_at: '1792558800'),
-               ActionMailboxGraph::Token.new(access_token: 'secret-token', expires_at: Time.at(1792558800))]
+               ActionMailboxGraph::Token.new(access_token: 'secret-token', expires_at: Time.at(1_792_558_800))]
     invalid.each do |value|
       provider = ActionMailboxGraph::CallableTokenProvider.new(-> { value })
       error = assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }

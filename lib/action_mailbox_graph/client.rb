@@ -33,8 +33,7 @@ module ActionMailboxGraph
       query = { '$select' => 'id,isRead,receivedDateTime', '$top' => @configuration.poll_batch_size,
                 'changeType' => 'created' }
       query = nil if delta_link
-      response = request(:get, path, query: query)
-      parse_json(response)
+      parse_json(request(:get, path, query: query))
     end
 
     def message_received_at(message_id, mailbox: nil)

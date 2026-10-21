@@ -1,0 +1,20 @@
+class CreateActionMailboxGraphTables < ActiveRecord::Migration[<%= ActiveRecord::Migration.current_version %>]
+  def change
+    create_table :action_mailbox_graph_delta_states do |table|
+      table.string :mailbox, null: false
+      table.string :folder, null: false
+      table.text :delta_link
+      table.timestamps
+      table.index [:mailbox, :folder], unique: true
+    end
+
+    create_table :action_mailbox_graph_receipts do |table|
+      table.string :mailbox, null: false
+      table.string :graph_message_id, null: false
+      table.bigint :inbound_email_id
+      table.boolean :processed, null: false, default: false
+      table.timestamps
+      table.index [:mailbox, :graph_message_id], unique: true, name: "index_action_mailbox_graph_receipts_unique"
+    end
+  end
+end

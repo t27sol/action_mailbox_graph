@@ -1,0 +1,137 @@
+# frozen_string_literal: true
+
+require "json"
+require "net/http"
+require "open3"
+require "time"
+require "uri"
+
+module ActionMailboxGraph
+  class TokenProvider
+    SCOPE = "https://graph.microsoft.com/.default"
+    RESOURCE = "https://graph.microsoft.com/"
+    EXPIRY_SKEW = 300
+
+    def initialize
+      @mutex = Mutex.new
+    end
+
+    def token
+      @mutex.synchronize do
+        return @cached_token if @cached_token && Time.now.to_i < @expires_at - EXPIRY_SKEW
+
+        access_token, expires_at = fetch_token
+        raise AuthenticationError, "token provider returned an empty token" if access_token.to_s.empty?
+
+        @cached_token = access_token
+        @expires_at = expires_at
+      end
+      @cached_token
+    end
+
+    private
+
+    def fetch_token
+      raise NotImplementedError
+    end
+
+    def parse_token(payload)
+      data = JSON.parse(payload)
+      expiry = data["expires_on"] || data["expiresOn"] || (Time.now.to_i + data.fetch("expires_in", 3600).to_i)
+      expires_at = if expiry.to_s.match?(/\A\d+\z/)
+        expiry.to_i
+      else
+        Time.parse(expiry.to_s).to_i
+      end
+      [data.fetch("access_token"), expires_at]
+    rescue JSON::ParserError, KeyError, ArgumentError => error
+      raise AuthenticationError, "could not obtain Graph access token (#{error.class})"
+    end
+  end
+
+  class CallableTokenProvider < TokenProvider
+    def initialize(callable)
+      super()
+      @callable = callable
+    end
+
+    private
+
+    def fetch_token
+      value = @callable.call
+      return [value, Time.now.to_i + 3600] if value.is_a?(String)
+
+      token = value.fetch(:access_token) { value.fetch("access_token") }
+      expires = value[:expires_on] || value["expires_on"] || value[:expires_at] || value["expires_at"] || Time.now.to_i + 3600
+      expires_at = if expires.respond_to?(:to_time)
+        expires.to_time.to_i
+      elsif expires.to_s.match?(/\A\d+\z/)
+        expires.to_i
+      else
+        Time.parse(expires.to_s).to_i
+      end
+      [token, expires_at]
+    rescue KeyError, NoMethodError => error
+      raise AuthenticationError, "invalid callable token result (#{error.class})"
+    end
+  end
+
+  class StaticTokenProvider < CallableTokenProvider
+    def initialize(token, expires_at: Time.now.to_i + 3600)
+      super(-> { { access_token: token, expires_at: expires_at } })
+    end
+  end
+
+  class ManagedIdentityTokenProvider < TokenProvider
+    def initialize(client_id: nil, env: ENV)
+      super()
+      @client_id = client_id
+      @env = env
+    end
+
+    private
+
+    def fetch_token
+      endpoint, headers = endpoint_and_headers
+      uri = URI(endpoint)
+      params = { "resource" => RESOURCE, "api-version" => "2019-08-01" }
+      params["client_id"] = @client_id unless @client_id.to_s.empty?
+      uri.query = URI.encode_www_form(params)
+      request = Net::HTTP::Get.new(uri)
+      headers.each { |name, value| request[name] = value }
+      response = Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == "https", open_timeout: 5, read_timeout: 10) do |http|
+        http.request(request)
+      end
+      raise AuthenticationError, "managed identity endpoint returned HTTP #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+
+      parse_token(response.body)
+    rescue SocketError, SystemCallError, Timeout::Error, URI::InvalidURIError
+      raise AuthenticationError, "managed identity endpoint could not be reached"
+    end
+
+    def endpoint_and_headers
+      if @env["IDENTITY_ENDPOINT"]
+        [@env.fetch("IDENTITY_ENDPOINT"), { "X-IDENTITY-HEADER" => @env.fetch("IDENTITY_HEADER") }]
+      elsif @env["MSI_ENDPOINT"]
+        [@env.fetch("MSI_ENDPOINT"), { "Secret" => @env.fetch("MSI_SECRET") }]
+      else
+        raise AuthenticationError, "no supported managed identity endpoint is configured"
+      end
+    rescue KeyError
+      raise AuthenticationError, "managed identity endpoint credentials are incomplete"
+    end
+  end
+
+  class AzureCliTokenProvider < TokenProvider
+    private
+
+    def fetch_token
+      output, _error, status = Open3.capture3("az", "account", "get-access-token", "--scope", SCOPE, "--output", "json")
+      raise AuthenticationError, "Azure CLI token request failed" unless status.success?
+
+      parse_token(output)
+    rescue Errno::ENOENT
+      raise AuthenticationError, "Azure CLI is not installed"
+    end
+  end
+end

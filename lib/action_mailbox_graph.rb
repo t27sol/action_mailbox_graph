@@ -33,3 +33,4 @@ end
 require 'action_mailbox_graph/railtie' if defined?(Rails::Railtie)
 
 ActionMailer::Base.add_delivery_method(:microsoft_graph, ActionMailboxGraph::DeliveryMethod)
+ActionMailer::Base.singleton_class.prepend(ActionMailboxGraph::DeliveryInstrumentation)

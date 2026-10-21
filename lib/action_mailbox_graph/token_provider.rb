@@ -7,6 +7,8 @@ require 'time'
 require 'uri'
 
 module ActionMailboxGraph
+  Token = Struct.new(:access_token, :expires_at, keyword_init: true)
+
   class TokenProvider
     SCOPE = 'https://graph.microsoft.com/.default'
     RESOURCE = 'https://graph.microsoft.com/'
@@ -35,9 +37,9 @@ module ActionMailboxGraph
       raise NotImplementedError
     end
 
-    def parse_token(payload)
+    def parse_token(payload, token_key: 'access_token')
       data = JSON.parse(payload)
-      [data.fetch('access_token'), token_expiration(data)]
+      [data.fetch(token_key), token_expiration(data)]
     rescue JSON::ParserError, KeyError, ArgumentError => e
       raise AuthenticationError, "could not obtain Graph access token (#{e.class})"
     end
@@ -48,7 +50,6 @@ module ActionMailboxGraph
     end
 
     def parse_expiration(expires)
-      return expires.to_time.to_i if expires.respond_to?(:to_time)
       return expires.to_i if expires.to_s.match?(/\A\d+\z/)
 
       Time.parse(expires.to_s).to_i
@@ -65,27 +66,17 @@ module ActionMailboxGraph
 
     def fetch_token
       value = @callable.call
-      return [value, Time.now.to_i + 3600] if value.is_a?(String)
+      unless value.is_a?(Token) && value.access_token.is_a?(String) && value.expires_at.is_a?(Integer)
+        raise AuthenticationError, 'callable token provider must return a Token with an integer expiry'
+      end
 
-      [token_from(value), callable_expiration(value)]
-    rescue KeyError, NoMethodError => e
-      raise AuthenticationError, "invalid callable token result (#{e.class})"
-    end
-
-    def token_from(value)
-      value.fetch(:access_token) { value.fetch('access_token') }
-    end
-
-    def callable_expiration(value)
-      expires = value[:expires_on] || value['expires_on'] || value[:expires_at] || value['expires_at'] ||
-                (Time.now.to_i + 3600)
-      parse_expiration(expires)
+      [value.access_token, value.expires_at]
     end
   end
 
   class StaticTokenProvider < CallableTokenProvider
     def initialize(token, expires_at: Time.now.to_i + 3600)
-      super(-> { { access_token: token, expires_at: expires_at } })
+      super(-> { Token.new(access_token: token, expires_at: expires_at) })
     end
   end
 
@@ -147,7 +138,7 @@ module ActionMailboxGraph
       output, _error, status = Open3.capture3('az', 'account', 'get-access-token', '--scope', SCOPE, '--output', 'json')
       raise AuthenticationError, 'Azure CLI token request failed' unless status.success?
 
-      parse_token(output)
+      parse_token(output, token_key: 'accessToken')
     rescue Errno::ENOENT
       raise AuthenticationError, 'Azure CLI is not installed'
     end

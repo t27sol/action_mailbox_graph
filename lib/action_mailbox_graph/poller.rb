@@ -12,6 +12,7 @@ module ActionMailboxGraph
       mailbox = @configuration.mailbox
       folder = @configuration.folder
       cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false, handed_off: 0 }
+      cursor[:baseline] = cursor[:delta_link].nil?
 
       poll_delta(mailbox, folder, cursor)
       cursor[:handed_off]
@@ -29,7 +30,7 @@ module ActionMailboxGraph
     end
 
     def advance_cursor(page, mailbox, folder, cursor)
-      cursor[:handed_off] += process_page(page, mailbox)
+      cursor[:handed_off] += process_page(page, mailbox) unless cursor[:baseline]
       next_link = page['@odata.nextLink']
       return cursor[:delta_link] = next_link if next_link
 
@@ -44,6 +45,7 @@ module ActionMailboxGraph
 
       @store.clear_delta_link(mailbox: mailbox, folder: folder)
       cursor[:delta_link] = nil
+      cursor[:baseline] = true
       cursor[:reset] = true
       :restart
     end
@@ -58,6 +60,7 @@ module ActionMailboxGraph
       message_id = message.fetch('id')
       unless @store.received?(mailbox: mailbox, message_id: message_id)
         mime = @client.raw_mime(message_id, mailbox: mailbox)
+        mime = "X-Original-To: #{mailbox}\r\n#{mime}"
         inbound_email = ActionMailbox::InboundEmail.create_and_extract_message_id!(mime)
         @store.record_received(mailbox: mailbox, message_id: message_id, inbound_email_id: inbound_email&.id)
       end

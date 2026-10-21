@@ -2,11 +2,7 @@
 
 require 'minitest/autorun'
 require 'webmock/minitest'
-require_relative '../lib/action_mailbox_graph/errors'
-require_relative '../lib/action_mailbox_graph/configuration'
-require_relative '../lib/action_mailbox_graph/token_provider'
-require_relative '../lib/action_mailbox_graph/client'
-require_relative '../lib/action_mailbox_graph/poller'
+require_relative '../lib/action_mailbox_graph'
 
 WebMock.disable_net_connect!
 
@@ -119,16 +115,50 @@ class ActionMailboxGraphTest < Minitest::Test
     assert_equal 2, ActionMailbox::InboundEmail.sources.length
   end
 
+  def test_first_poll_saves_baseline_without_importing_existing_messages
+    first = initial_delta_url
+    next_page = 'https://graph.microsoft.com/v1.0/baseline/page/2'
+    final_delta = 'https://graph.microsoft.com/v1.0/baseline/cursor'
+    stub_json(:get, first, status: 200, body: { value: [{ id: 'old1' }], '@odata.nextLink' => next_page })
+    stub_json(:get, next_page, status: 200, body: { value: [{ id: 'old2' }], '@odata.deltaLink' => final_delta })
+    stub_json(:get, final_delta, status: 200, body: { value: [{ id: 'new1' }], '@odata.deltaLink' => final_delta })
+    stub_message('new1')
+    store = MemoryStore.new
+    poller = ActionMailboxGraph::Poller.new(@configuration, store: store)
+
+    assert_equal 0, poller.call
+    assert_empty ActionMailbox::InboundEmail.sources
+    assert_empty store.received_ids
+    assert_equal final_delta, store.delta_link(mailbox: @configuration.mailbox, folder: 'Inbox')
+    assert_equal 1, poller.call
+    assert_equal [[@configuration.mailbox, 'new1']], store.received_ids
+  end
+
+  def test_poll_preserves_mime_and_supplies_blind_delivery_recipient_for_rails_routing
+    poller, = poller_with_two_page_fixture
+    mime = "To: visible@example.test\r\nMessage-ID: <m1@example.test>\r\n\r\noriginal body"
+    stub_request(:get, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/m1/$value')
+      .to_return(status: 200, body: mime)
+
+    poller.call
+
+    source = ActionMailbox::InboundEmail.sources.first
+    assert_equal "X-Original-To: shared@example.test\r\n#{mime}", source
+    assert_includes Mail.read_from_string(source).recipients, 'shared@example.test'
+    assert_includes Mail.read_from_string(source).recipients, 'visible@example.test'
+  end
+
   def test_expired_delta_link_is_cleared_and_restarted_once
     store = MemoryStore.new
     store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox', delta_link: 'https://graph.microsoft.com/stale')
     stub_request(:get, 'https://graph.microsoft.com/stale').to_return(status: 410, body: 'expired')
-    initial = 'https://graph.microsoft.com/v1.0/users/shared%40example.test/mailFolders/Inbox/messages/delta?%24select=id%2CisRead%2CreceivedDateTime&%24top=50'
-    stub_json(:get, initial, status: 200,
-                             body: { value: [], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
+    stub_json(:get, initial_delta_url, status: 200,
+                                     body: { value: [{ id: 'old1' }], '@odata.deltaLink' => 'https://graph.microsoft.com/fresh' })
 
     assert_equal 0, ActionMailboxGraph::Poller.new(@configuration, store: store).call
     assert_equal 'https://graph.microsoft.com/fresh', store.delta_link(mailbox: @configuration.mailbox, folder: 'Inbox')
+    assert_empty ActionMailbox::InboundEmail.sources
+    assert_empty store.received_ids
   end
 
   def test_retries_retryable_status_and_honors_retry_after
@@ -158,12 +188,17 @@ class ActionMailboxGraphTest < Minitest::Test
   end
 
   def poller_with_two_page_fixture
-    first = 'https://graph.microsoft.com/v1.0/users/shared%40example.test/mailFolders/Inbox/messages/delta?' \
-            '%24select=id%2CisRead%2CreceivedDateTime&%24top=50'
+    first = 'https://graph.microsoft.com/v1.0/saved/cursor'
     next_page = 'https://graph.microsoft.com/v1.0/page/2'
     final_delta = 'https://graph.microsoft.com/v1.0/delta/cursor'
     stub_delta_pages(first, next_page, final_delta)
     store = MemoryStore.new
+    store.save_delta_link(mailbox: @configuration.mailbox, folder: 'Inbox', delta_link: first)
     [ActionMailboxGraph::Poller.new(@configuration, store: store), store, final_delta]
+  end
+
+  def initial_delta_url
+    'https://graph.microsoft.com/v1.0/users/shared%40example.test/mailFolders/Inbox/messages/delta?' \
+      '%24select=id%2CisRead%2CreceivedDateTime&%24top=50'
   end
 end

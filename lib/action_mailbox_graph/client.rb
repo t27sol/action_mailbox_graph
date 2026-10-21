@@ -27,11 +27,11 @@ module ActionMailboxGraph
       request(:post, user_path(address, 'sendMail'), body: Base64.strict_encode64(mime), content_type: 'text/plain')
     end
 
-    def delta_page(folder: @configuration.folder, mailbox: nil, delta_link: nil, url: nil)
+    def delta_page(folder: @configuration.folder, mailbox: nil, delta_link: nil)
       address = selected_mailbox(mailbox)
-      path = url || delta_link || user_path(address, "mailFolders/#{escape_path(folder)}/messages/delta")
+      path = delta_link || user_path(address, "mailFolders/#{escape_path(folder)}/messages/delta")
       query = { '$select' => 'id,isRead,receivedDateTime', '$top' => @configuration.poll_batch_size }
-      query = nil if url || delta_link
+      query = nil if delta_link
       response = request(:get, path, query: query)
       JSON.parse(response.body)
     end

@@ -44,7 +44,7 @@ ActionMailboxGraph.configure do |config|
   config.http_write_timeout = 30
 end
 
-config.action_mailer.delivery_method = :microsoft_graph
+Rails.application.config.action_mailer.delivery_method = :microsoft_graph
 ```
 
 By default, the gem uses Azure managed identity and selects the user-assigned identity configured by `identity_client_id`.
@@ -52,6 +52,7 @@ Leave the client ID empty to use the hosting service's default managed identity.
 The Graph client uses the configured mailbox for every operation unless a caller explicitly supplies a different mailbox.
 
 Action Mailbox routes the received MIME asynchronously using the application's normal `ApplicationMailbox` routing rules.
+The gem prepends `X-Original-To` with the shared mailbox address so address-based routes also match blind-copied messages.
 Use `config.processed_folder` only with a Graph folder ID; when it is unset, successfully handed-off messages are marked read.
 Use `config.state_store` to provide a custom store that implements `delta_link`, `save_delta_link`, `clear_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
 
@@ -70,8 +71,9 @@ bin/rails action_mailbox_graph:poll
 ```
 
 Schedule it at the interval your application needs and ensure only one poller runs for a mailbox at a time.
-The first poll imports every existing message in the selected folder; later polls use the saved delta link to fetch changes.
+The first poll establishes and saves a delta baseline without importing pre-existing mail; later polls use the saved delta link to fetch new messages.
 The poller follows all Graph delta pages, persists the final delta link, and resets to a fresh delta query when Graph expires a link with HTTP 410.
+After a reset, it establishes a new baseline without importing messages already in the folder.
 The included Active Record store keeps delta state and Graph-message receipts in the application's database.
 It avoids handing the same Graph message to Action Mailbox twice across poller restarts and retries marking/moving a handed-off message if that final Graph operation previously failed.
 
@@ -88,7 +90,8 @@ end
 
 Sign in with `az login` using a development identity, and ensure that identity has the required delegated Graph permissions and Exchange mailbox access for the shared mailbox.
 Production managed-identity role assignments do not grant local developer access.
-Tests can inject a token provider responding to `token`, a callable returning a token or token hash, or `ActionMailboxGraph::StaticTokenProvider`.
+Tests can inject a token provider responding to `token`, `ActionMailboxGraph::StaticTokenProvider`, or a callable returning `ActionMailboxGraph::Token.new(access_token: "test-token", expires_at: Time.now.to_i + 3600)`.
+Callable token results must be `ActionMailboxGraph::Token` objects with a string access token and an integer Unix expiry timestamp.
 
 ## One-time tenant administrator setup
 
@@ -153,6 +156,7 @@ Create and license a normal user account only if your organization requires inte
 ## Security and operational notes
 
 The gem does not log message content, recipients, attachments, access tokens, request headers, or Graph response bodies.
+Action Mailer's delivery instrumentation is suppressed for the Microsoft Graph delivery method.
 Graph request errors include status codes and generic messages only.
 Retry attempts are bounded and honor Graph's `Retry-After` header for HTTP 429, 503, and 504 responses.
 

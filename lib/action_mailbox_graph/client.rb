@@ -50,12 +50,12 @@ module ActionMailboxGraph
 
     def mark_read(message_id, mailbox: nil)
       path = user_path(selected_mailbox(mailbox), "messages/#{escape_path(message_id)}")
-      request(:patch, path, body: { isRead: true }.to_json, content_type: 'application/json')
+      request(:patch, path, body: JSON.generate(isRead: true), content_type: 'application/json')
     end
 
     def move(message_id, folder:, mailbox: nil)
       request(:post, user_path(selected_mailbox(mailbox), "messages/#{escape_path(message_id)}/move"),
-              body: { destinationId: folder }.to_json, content_type: 'application/json')
+              body: JSON.generate(destinationId: folder), content_type: 'application/json')
     end
 
     private

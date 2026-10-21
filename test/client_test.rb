@@ -16,6 +16,35 @@ class ClientTest < Minitest::Test
     @client = ActionMailboxGraph::Client.new(configuration)
   end
 
+  # Graph's update-message contract requires a JSON boolean for isRead.
+  # https://learn.microsoft.com/en-us/graph/api/message-update
+  def test_mark_read_submits_the_graph_json_update
+    request = stub_request(:patch, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/id')
+              .with(headers: { 'Content-Type' => 'application/json' }) do |http|
+                JSON.parse(http.body) == { 'isRead' => true }
+              end
+              .to_return(status: 200, body: '{}')
+
+    @client.mark_read('id')
+
+    assert_requested request, times: 1
+  end
+
+  # Graph's move-message contract requires destinationId to preserve the folder ID.
+  # https://learn.microsoft.com/en-us/graph/api/message-move
+  def test_move_submits_the_graph_json_destination
+    folder = "opaque/\"folder\\id+="
+    request = stub_request(:post, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/id/move')
+              .with(headers: { 'Content-Type' => 'application/json' }) do |http|
+                JSON.parse(http.body) == { 'destinationId' => folder }
+              end
+              .to_return(status: 201, body: '{}')
+
+    @client.move('id', folder: folder)
+
+    assert_requested request, times: 1
+  end
+
   def test_graph_json_parse_errors_have_no_response_in_their_exception_chain
     link = 'https://graph.microsoft.com/v1.0/messages/delta?$deltatoken=opaque'
     stub_request(:get, link).to_return(status: 200, body: '{"value":[{"id":"private-response-marker"')

@@ -55,7 +55,8 @@ The Graph client uses the configured mailbox for every operation unless a caller
 Action Mailbox routes the received MIME asynchronously using the application's normal `ApplicationMailbox` routing rules.
 The gem prepends `X-Original-To` with the shared mailbox address so address-based routes also match blind-copied messages.
 Use `config.processed_folder` only with a Graph folder ID; when it is unset, successfully handed-off messages are marked read.
-Use `config.state_store` to provide a custom store that implements `delta_link`, `last_polled_at`, `save_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+Use `config.state_store` to provide a custom store that implements `start_baseline`, `delta_link`, `last_polled_at`, `save_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+`start_baseline(mailbox:, folder:, started_at:)` must persist the first `started_at` once and return that same baseline timestamp on every later call, including after a failed first poll. A baseline-only state has no cursor or last-poll timestamp yet.
 `save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)` must atomically save the cursor and poll timestamp; `last_polled_at(mailbox:, folder:)` returns that timestamp as a `Time`.
 
 ## Polling schedule
@@ -74,9 +75,10 @@ bin/rails action_mailbox_graph:poll
 
 Schedule it at the interval your application needs and ensure only one poller runs for a mailbox at a time.
 The first poll establishes and saves a delta baseline without importing pre-existing mail; later polls use the saved delta link to fetch new messages.
-Initial delta requests use Graph's `changeType=created` option so later read-status or content updates do not import historical messages. Graph encodes this option into its continuation links.
+Mail received before the first poll starts is never imported, even if a later read-state change returns it or it is moved into the watched folder later. The first baseline timestamp is persisted before polling and is never advanced.
+Initial delta requests retain Graph's `changeType=created` option as an optimization; Graph may still return read-state events. Every handoff independently checks `receivedDateTime` against the persisted baseline timestamp.
 The poller follows all Graph delta pages, persists the final delta link, and resets to a fresh delta query when Graph expires a link with HTTP 410.
-After an expired cursor, it scans the entire watched folder and hands off messages received at or after the last successful poll's start time, with a five-minute overlap. Existing receipts prevent repeat handoff.
+After an expired cursor, it scans the entire watched folder and hands off messages received at or after the last successful poll's start time, with a five-minute overlap, while still excluding mail predating the first baseline. Existing receipts prevent repeat handoff.
 The cursor and poll-start timestamp advance together only after every page succeeds. A failed recovery retains the previous checkpoint for the next attempt; first-ever startup remains baseline-only.
 The included Active Record store keeps delta state and Graph-message receipts in the application's database.
 It avoids handing the same Graph message to Action Mailbox twice across poller restarts and retries marking/moving a handed-off message if that final Graph operation previously failed.
@@ -169,6 +171,7 @@ ActionMailer::MailDeliveryJob.log_arguments = false
 
 Apply the same setting to a custom delivery job if the app uses one, and review application callbacks and logging separately.
 Graph request errors include status codes and generic messages only.
+Malformed JSON and HTTP responses produce fixed gem errors without response-bearing exception causes.
 Retry attempts are bounded and honor Graph's `Retry-After` header for HTTP 429, 503, and 504 responses.
 
 Microsoft Graph delta and next links must be absolute HTTPS URLs on `graph.microsoft.com`; relative links are rejected.

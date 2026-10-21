@@ -3,11 +3,56 @@
 require 'minitest/autorun'
 require 'minitest/mock'
 require 'webmock/minitest'
+require 'stringio'
 require_relative '../lib/action_mailbox_graph'
 
 WebMock.disable_net_connect!
 
 class TokenProviderTest < Minitest::Test
+  def test_managed_identity_truncated_token_json_has_no_response_in_its_exception_chain
+    provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
+      env: { 'IDENTITY_ENDPOINT' => 'http://identity.test/token', 'IDENTITY_HEADER' => 'identity-header' }
+    )
+    stub_request(:get, /identity\.test/).to_return(status: 200, body: '{"access_token":"secret-token-marker"')
+
+    error = assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }
+
+    assert_equal 'could not obtain Graph access token', error.message
+    assert_nil error.cause
+    refute_includes error.full_message, 'secret-token-marker'
+    refute_includes error.full_message, 'access_token'
+  end
+
+  def test_cli_truncated_token_json_has_no_response_in_its_exception_chain
+    result = ['{"accessToken":"secret-cli-token-marker"', '', successful_status]
+    error = Open3.stub(:capture3, result) do
+      assert_raises(ActionMailboxGraph::AuthenticationError) { ActionMailboxGraph::AzureCliTokenProvider.new.token }
+    end
+
+    assert_equal 'could not obtain Graph access token', error.message
+    assert_nil error.cause
+    refute_includes error.full_message, 'secret-cli-token-marker'
+    refute_includes error.full_message, 'accessToken'
+  end
+
+  def test_managed_identity_http_parse_errors_have_no_response_in_their_exception_chain
+    provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
+      env: { 'IDENTITY_ENDPOINT' => 'http://identity.test/token', 'IDENTITY_HEADER' => 'identity-header' }
+    )
+    http = Object.new
+    http.define_singleton_method(:request) do |_request|
+      Net::HTTPResponse.read_new(StringIO.new("secret-http-token-marker\r\n"))
+    end
+    start = ->(*_args, &block) { block.call(http) }
+    error = Net::HTTP.stub(:start, start) do
+      assert_raises(ActionMailboxGraph::AuthenticationError) { provider.token }
+    end
+
+    assert_equal 'managed identity endpoint returned an invalid HTTP response', error.message
+    assert_nil error.cause
+    refute_includes error.full_message, 'secret-http-token-marker'
+  end
+
   def test_managed_identity_uses_identity_header_and_selected_client_id
     provider = ActionMailboxGraph::ManagedIdentityTokenProvider.new(
       client_id: 'selected-identity',

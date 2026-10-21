@@ -40,8 +40,8 @@ module ActionMailboxGraph
     def parse_token(payload, token_key: 'access_token')
       data = JSON.parse(payload)
       [data.fetch(token_key), token_expiration(data)]
-    rescue JSON::ParserError, KeyError, ArgumentError => e
-      raise AuthenticationError, "could not obtain Graph access token (#{e.class})"
+    rescue JSON::ParserError, KeyError, ArgumentError, TypeError, NoMethodError
+      raise AuthenticationError, 'could not obtain Graph access token', cause: nil
     end
 
     def token_expiration(data)
@@ -96,8 +96,10 @@ module ActionMailboxGraph
       end
 
       parse_token(response.body)
+    rescue Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError, EOFError
+      raise AuthenticationError, 'managed identity endpoint returned an invalid HTTP response', cause: nil
     rescue SocketError, SystemCallError, Timeout::Error, URI::InvalidURIError
-      raise AuthenticationError, 'managed identity endpoint could not be reached'
+      raise AuthenticationError, 'managed identity endpoint could not be reached', cause: nil
     end
 
     def identity_response
@@ -121,7 +123,7 @@ module ActionMailboxGraph
     def endpoint_and_headers
       [@env.fetch('IDENTITY_ENDPOINT'), { 'X-IDENTITY-HEADER' => @env.fetch('IDENTITY_HEADER') }]
     rescue KeyError
-      raise AuthenticationError, 'managed identity endpoint credentials are incomplete'
+      raise AuthenticationError, 'managed identity endpoint credentials are incomplete', cause: nil
     end
   end
 
@@ -134,7 +136,7 @@ module ActionMailboxGraph
 
       parse_token(output, token_key: 'accessToken')
     rescue Errno::ENOENT
-      raise AuthenticationError, 'Azure CLI is not installed'
+      raise AuthenticationError, 'Azure CLI is not installed', cause: nil
     end
   end
 end

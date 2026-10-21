@@ -2,6 +2,13 @@
 
 module ActionMailboxGraph
   class StateStore
+    def start_baseline(mailbox:, folder:, started_at:)
+      record = state_model.find_or_create_by!(mailbox: mailbox, folder: folder) do |state|
+        state.baseline_at = started_at
+      end
+      record.baseline_at
+    end
+
     def delta_link(mailbox:, folder:)
       state_model.find_by(mailbox: mailbox, folder: folder)&.delta_link
     end
@@ -11,7 +18,7 @@ module ActionMailboxGraph
     end
 
     def save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)
-      record = state_model.find_or_initialize_by(mailbox: mailbox, folder: folder)
+      record = state_model.find_by!(mailbox: mailbox, folder: folder)
       record.update!(delta_link: delta_link, last_polled_at: last_polled_at)
     end
 

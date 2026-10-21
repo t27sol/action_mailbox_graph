@@ -35,6 +35,8 @@ module ActionMailboxGraph
       query = nil if delta_link
       response = request(:get, path, query: query)
       JSON.parse(response.body)
+    rescue JSON::ParserError
+      raise RequestError, 'Microsoft Graph returned an invalid JSON response', cause: nil
     end
 
     def raw_mime(message_id, mailbox: nil)
@@ -81,6 +83,8 @@ module ActionMailboxGraph
 
       uri.query = URI.encode_www_form(query) if query
       uri
+    rescue URI::InvalidURIError
+      raise ConfigurationError, 'Graph returned an invalid URL', cause: nil
     end
 
     def with_retries
@@ -102,8 +106,10 @@ module ActionMailboxGraph
       check_response!(response, method)
     rescue AuthenticationError, RequestError
       raise
+    rescue Net::HTTPBadResponse, Net::HTTPHeaderSyntaxError, Net::ProtocolError, EOFError
+      raise RequestError, 'Microsoft Graph returned an invalid HTTP response', cause: nil
     rescue SocketError, SystemCallError, Timeout::Error, OpenSSL::SSL::SSLError
-      raise RequestError, 'Microsoft Graph request failed due to a connection error'
+      raise RequestError, 'Microsoft Graph request failed due to a connection error', cause: nil
     end
 
     def build_http_request(uri, method, body, content_type)

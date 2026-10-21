@@ -17,6 +17,7 @@ module ActionMailboxGraph
       folder = @configuration.folder
       cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false,
                  handed_off: 0, started_at: Time.now }
+      cursor[:received_since] = @store.start_baseline(mailbox: mailbox, folder: folder, started_at: cursor[:started_at])
       cursor[:baseline] = cursor[:delta_link].nil?
 
       poll_delta(mailbox, folder, cursor)
@@ -49,7 +50,8 @@ module ActionMailboxGraph
       raise unless e.status == 410 && !cursor[:reset]
 
       unless cursor[:baseline]
-        cursor[:received_since] = @store.last_polled_at(mailbox: mailbox, folder: folder) - RESYNC_OVERLAP
+        cursor[:received_since] = [cursor[:received_since],
+                                  @store.last_polled_at(mailbox: mailbox, folder: folder) - RESYNC_OVERLAP].max
       end
       cursor[:delta_link] = nil
       cursor[:reset] = true
@@ -59,13 +61,14 @@ module ActionMailboxGraph
     def process_page(page, mailbox, received_since)
       (page['value'] || []).sum do |message|
         next 0 if message['@removed']
-        next 0 if received_since && Time.iso8601(message.fetch('receivedDateTime')) < received_since
 
-        process_message(message, mailbox)
+        process_message(message, mailbox, received_since)
       end
     end
 
-    def process_message(message, mailbox)
+    def process_message(message, mailbox, received_since)
+      return 0 if Time.iso8601(message.fetch('receivedDateTime')) < received_since
+
       message_id = message.fetch('id')
       unless @store.received?(mailbox: mailbox, message_id: message_id)
         mime = @client.raw_mime(message_id, mailbox: mailbox)

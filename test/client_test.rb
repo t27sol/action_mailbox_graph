@@ -2,6 +2,7 @@
 
 require 'minitest/autorun'
 require 'webmock/minitest'
+require 'stringio'
 require_relative '../lib/action_mailbox_graph'
 
 WebMock.disable_net_connect!
@@ -11,7 +12,37 @@ class ClientTest < Minitest::Test
     configuration = ActionMailboxGraph::Configuration.new
     configuration.mailbox = 'shared@example.test'
     configuration.token_provider = ActionMailboxGraph::StaticTokenProvider.new('test-token')
+    @configuration = configuration
     @client = ActionMailboxGraph::Client.new(configuration)
+  end
+
+  def test_delta_json_parse_errors_have_no_response_in_their_exception_chain
+    link = 'https://graph.microsoft.com/v1.0/messages/delta?$deltatoken=opaque'
+    stub_request(:get, link).to_return(status: 200, body: '{"value":[{"id":"private-response-marker"')
+
+    error = assert_raises(ActionMailboxGraph::RequestError) { @client.delta_page(delta_link: link) }
+
+    assert_equal 'Microsoft Graph returned an invalid JSON response', error.message
+    assert_nil error.cause
+    refute_includes error.full_message, 'private-response-marker'
+  end
+
+  def test_graph_http_parse_errors_have_no_response_in_their_exception_chain
+    http = Object.new
+    http.define_singleton_method(:request) do |_request|
+      Net::HTTPResponse.read_new(StringIO.new("private-http-response-marker\r\n"))
+    end
+    client = ActionMailboxGraph::Client.new(@configuration, http_factory: ->(_uri) { http })
+    operations = [-> { client.send_mail('synthetic MIME') }, -> { client.delta_page },
+                  -> { client.raw_mime('id') }, -> { client.mark_read('id') },
+                  -> { client.move('id', folder: 'processed') }]
+
+    operations.each do |operation|
+      error = assert_raises(ActionMailboxGraph::RequestError, &operation)
+      assert_equal 'Microsoft Graph returned an invalid HTTP response', error.message
+      assert_nil error.cause
+      refute_includes error.full_message, 'private-http-response-marker'
+    end
   end
 
   def test_creation_only_delta_follows_absolute_next_and_saved_links_unchanged

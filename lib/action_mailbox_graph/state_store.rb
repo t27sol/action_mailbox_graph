@@ -2,6 +2,10 @@
 
 module ActionMailboxGraph
   class StateStore
+    def baseline_at(mailbox:, folder:)
+      state_model.find_by(mailbox: mailbox, folder: folder)&.baseline_at
+    end
+
     def start_baseline(mailbox:, folder:, started_at:)
       record = state_model.find_or_create_by!(mailbox: mailbox, folder: folder) do |state|
         state.baseline_at = started_at

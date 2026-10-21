@@ -55,7 +55,8 @@ The Graph client uses the configured mailbox for every operation unless a caller
 Action Mailbox routes the received MIME asynchronously using the application's normal `ApplicationMailbox` routing rules.
 The gem prepends `X-Original-To` with the shared mailbox address so address-based routes also match blind-copied messages.
 Use `config.processed_folder` only with a Graph folder ID; when it is unset, successfully handed-off messages are marked read.
-Use `config.state_store` to provide a custom store that implements `start_baseline`, `delta_link`, `last_polled_at`, `save_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+Use `config.state_store` to provide a custom store that implements `baseline_at`, `start_baseline`, `delta_link`, `last_polled_at`, `save_delta_link`, `received?`, `processed?`, `record_received`, and `mark_processed`.
+`baseline_at(mailbox:, folder:)` returns the existing first-start timestamp, or `nil` before first execution.
 `start_baseline(mailbox:, folder:, started_at:)` must persist the first `started_at` once and return that same baseline timestamp on every later call, including after a failed first poll. A baseline-only state has no cursor or last-poll timestamp yet.
 `save_delta_link(mailbox:, folder:, delta_link:, last_polled_at:)` must atomically save the cursor and poll timestamp; `last_polled_at(mailbox:, folder:)` returns that timestamp as a `Time`.
 
@@ -75,11 +76,12 @@ bin/rails action_mailbox_graph:poll
 
 Schedule it at the interval your application needs and ensure only one poller runs for a mailbox at a time.
 The first poll establishes and saves a delta baseline without importing pre-existing mail; later polls use the saved delta link to fetch new messages.
+Only the first execution skips the initial snapshot. If startup fails before a cursor is saved, subsequent attempts scan the folder and hand off mail received at or after the persisted first-start timestamp.
 Mail received before the first poll starts is never imported, even if a later read-state change returns it or it is moved into the watched folder later. The first baseline timestamp is persisted before polling and is never advanced.
-Initial delta requests retain Graph's `changeType=created` option as an optimization; Graph may still return read-state events. Every handoff independently checks `receivedDateTime` against the persisted baseline timestamp.
+Initial delta requests retain Graph's `changeType=created` option as an optimization; Graph may still return sparse read-state events. Completed receipts are skipped, pending receipts resume finalization, and unseen messages missing `receivedDateTime` fetch that metadata before the baseline check.
 The poller follows all Graph delta pages, persists the final delta link, and resets to a fresh delta query when Graph expires a link with HTTP 410.
 After an expired cursor, it scans the entire watched folder and hands off messages received at or after the last successful poll's start time, with a five-minute overlap, while still excluding mail predating the first baseline. Existing receipts prevent repeat handoff.
-The cursor and poll-start timestamp advance together only after every page succeeds. A failed recovery retains the previous checkpoint for the next attempt; first-ever startup remains baseline-only.
+The cursor and poll-start timestamp advance together only after every page succeeds. A failed recovery retains the previous checkpoint for the next attempt; the first execution remains baseline-only.
 The included Active Record store keeps delta state and Graph-message receipts in the application's database.
 It avoids handing the same Graph message to Action Mailbox twice across poller restarts and retries marking/moving a handed-off message if that final Graph operation previously failed.
 
@@ -177,6 +179,7 @@ Retry attempts are bounded and honor Graph's `Retry-After` header for HTTP 429, 
 Microsoft Graph delta and next links must be absolute HTTPS URLs on `graph.microsoft.com`; relative links are rejected.
 These links are opaque; treat the database values as sensitive operational state and do not edit them manually.
 The database receipts contain Graph message IDs and Action Mailbox record IDs, not message content.
+Graph folder and message IDs require case-sensitive comparison and uniqueness. The generated migration uses `utf8mb4_bin` for those columns on MySQL; custom stores must preserve the same comparison semantics.
 Use Action Mailbox's normal data retention and incineration settings for the stored raw MIME.
 
 ## Supported behavior

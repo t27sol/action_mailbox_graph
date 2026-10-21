@@ -17,8 +17,11 @@ module ActionMailboxGraph
       folder = @configuration.folder
       cursor = { delta_link: @store.delta_link(mailbox: mailbox, folder: folder), reset: false,
                  handed_off: 0, started_at: Time.now }
-      cursor[:received_since] = @store.start_baseline(mailbox: mailbox, folder: folder, started_at: cursor[:started_at])
-      cursor[:baseline] = cursor[:delta_link].nil?
+      baseline_at = @store.baseline_at(mailbox: mailbox, folder: folder)
+      cursor[:baseline] = cursor[:delta_link].nil? && baseline_at.nil?
+      cursor[:received_since] = baseline_at || @store.start_baseline(
+        mailbox: mailbox, folder: folder, started_at: cursor[:started_at]
+      )
 
       poll_delta(mailbox, folder, cursor)
       cursor[:handed_off]
@@ -49,9 +52,10 @@ module ActionMailboxGraph
     rescue RequestError => e
       raise unless e.status == 410 && !cursor[:reset]
 
-      unless cursor[:baseline]
+      last_polled_at = @store.last_polled_at(mailbox: mailbox, folder: folder)
+      if last_polled_at
         cursor[:received_since] = [cursor[:received_since],
-                                  @store.last_polled_at(mailbox: mailbox, folder: folder) - RESYNC_OVERLAP].max
+                                  last_polled_at - RESYNC_OVERLAP].max
       end
       cursor[:delta_link] = nil
       cursor[:reset] = true
@@ -67,21 +71,28 @@ module ActionMailboxGraph
     end
 
     def process_message(message, mailbox, received_since)
-      return 0 if Time.iso8601(message.fetch('receivedDateTime')) < received_since
-
       message_id = message.fetch('id')
+      return 0 if @store.processed?(mailbox: mailbox, message_id: message_id)
+
       unless @store.received?(mailbox: mailbox, message_id: message_id)
+        return 0 if message_received_at(message, mailbox) < received_since
+
         mime = @client.raw_mime(message_id, mailbox: mailbox)
         mime = "X-Original-To: #{mailbox}\r\n#{mime}"
         inbound_email = ActionMailbox::InboundEmail.create_and_extract_message_id!(mime)
         @store.record_received(mailbox: mailbox, message_id: message_id, inbound_email_id: inbound_email&.id)
       end
 
-      return 0 if @store.processed?(mailbox: mailbox, message_id: message_id)
-
       finalize_message(message_id, mailbox)
       @store.mark_processed(mailbox: mailbox, message_id: message_id)
       1
+    end
+
+    def message_received_at(message, mailbox)
+      value = message['receivedDateTime'] || @client.message_received_at(message.fetch('id'), mailbox: mailbox)
+      Time.iso8601(value)
+    rescue ArgumentError, TypeError
+      raise RequestError, 'Microsoft Graph returned an invalid received timestamp', cause: nil
     end
 
     def finalize_message(message_id, mailbox)

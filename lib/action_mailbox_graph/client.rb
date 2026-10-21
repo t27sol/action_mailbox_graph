@@ -34,9 +34,15 @@ module ActionMailboxGraph
                 'changeType' => 'created' }
       query = nil if delta_link
       response = request(:get, path, query: query)
-      JSON.parse(response.body)
-    rescue JSON::ParserError
-      raise RequestError, 'Microsoft Graph returned an invalid JSON response', cause: nil
+      parse_json(response)
+    end
+
+    def message_received_at(message_id, mailbox: nil)
+      response = request(:get, user_path(selected_mailbox(mailbox), "messages/#{escape_path(message_id)}"),
+                         query: { '$select' => 'receivedDateTime' })
+      parse_json(response).fetch('receivedDateTime')
+    rescue KeyError, TypeError, NoMethodError
+      raise RequestError, 'Microsoft Graph returned an invalid received timestamp', cause: nil
     end
 
     def raw_mime(message_id, mailbox: nil)
@@ -54,6 +60,12 @@ module ActionMailboxGraph
     end
 
     private
+
+    def parse_json(response)
+      JSON.parse(response.body)
+    rescue JSON::ParserError
+      raise RequestError, 'Microsoft Graph returned an invalid JSON response', cause: nil
+    end
 
     def selected_mailbox(mailbox)
       return @configuration.mailbox if mailbox.nil?

@@ -16,15 +16,29 @@ class ClientTest < Minitest::Test
     @client = ActionMailboxGraph::Client.new(configuration)
   end
 
-  def test_delta_json_parse_errors_have_no_response_in_their_exception_chain
+  def test_graph_json_parse_errors_have_no_response_in_their_exception_chain
     link = 'https://graph.microsoft.com/v1.0/messages/delta?$deltatoken=opaque'
     stub_request(:get, link).to_return(status: 200, body: '{"value":[{"id":"private-response-marker"')
+    stub_request(:get, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/id')
+      .with(query: { '$select' => 'receivedDateTime' })
+      .to_return(status: 200, body: '{"receivedDateTime":"private-response-marker"')
 
-    error = assert_raises(ActionMailboxGraph::RequestError) { @client.delta_page(delta_link: link) }
+    [-> { @client.delta_page(delta_link: link) }, -> { @client.message_received_at('id') }].each do |operation|
+      error = assert_raises(ActionMailboxGraph::RequestError, &operation)
 
-    assert_equal 'Microsoft Graph returned an invalid JSON response', error.message
-    assert_nil error.cause
-    refute_includes error.full_message, 'private-response-marker'
+      assert_equal 'Microsoft Graph returned an invalid JSON response', error.message
+      assert_nil error.cause
+      refute_includes error.full_message, 'private-response-marker'
+    end
+  end
+
+  def test_message_received_at_fetches_the_timestamp_with_a_metadata_only_projection
+    request = stub_request(:get, 'https://graph.microsoft.com/v1.0/users/shared%40example.test/messages/id')
+              .with(query: { '$select' => 'receivedDateTime' })
+              .to_return(status: 200, body: JSON.generate(receivedDateTime: '2026-10-21T12:01:00Z'))
+
+    assert_equal '2026-10-21T12:01:00Z', @client.message_received_at('id')
+    assert_requested request, times: 1
   end
 
   def test_graph_http_parse_errors_have_no_response_in_their_exception_chain
@@ -35,7 +49,7 @@ class ClientTest < Minitest::Test
     client = ActionMailboxGraph::Client.new(@configuration, http_factory: ->(_uri) { http })
     operations = [-> { client.send_mail('synthetic MIME') }, -> { client.delta_page },
                   -> { client.raw_mime('id') }, -> { client.mark_read('id') },
-                  -> { client.move('id', folder: 'processed') }]
+                  -> { client.move('id', folder: 'processed') }, -> { client.message_received_at('id') }]
 
     operations.each do |operation|
       error = assert_raises(ActionMailboxGraph::RequestError, &operation)
